@@ -650,10 +650,8 @@ struct tasklet_struct
 	unsigned long state;
 	atomic_t count;
 	bool use_callback;
-	union {
-		void (*func)(unsigned long data);
-		void (*callback)(struct tasklet_struct *t);
-	};
+	void (*func)(unsigned long data);
+	void (*callback)(struct tasklet_struct *t);
 	unsigned long data;
 };
 
