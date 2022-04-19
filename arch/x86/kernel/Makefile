@@ -150,6 +150,7 @@ obj-$(CONFIG_UNWINDER_GUESS)		+= unwind_guess.o
 obj-$(CONFIG_AMD_MEM_ENCRYPT)		+= sev.o
 obj-$(CONFIG_X86_KERNEL_FINEIBT)	+= fineibt.o
 obj-$(CONFIG_X86_CET_TEST)		+= cet_test.o
+obj-$(CONFIG_X86_FINEIBT_TEST)		+= fineibt_test.o
 
 ###
 # 64 bit specific files
