@@ -279,3 +279,8 @@ endchoice
 config FRAME_POINTER
 	depends on !UNWINDER_ORC && !UNWINDER_GUESS
 	bool
+
+config X86_CET_TEST
+	depends on m
+	depends on X86_KERNEL_IBT
+	tristate "in-kernel CET testing module"
