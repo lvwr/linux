@@ -128,6 +128,41 @@ int apply_relocate(Elf32_Shdr *sechdrs,
 	return 0;
 }
 #else /*X86_64*/
+
+// shamelessly reshaped from PeterZ's IBT patches v2
+static inline void fineibt_branch_fix(void *loc, u64 *val)
+{
+#ifdef CONFIG_X86_KERNEL_FINEIBT
+	const void *addr = (void *)(4 + *val);
+	union text_poke_insn text;
+	u32 insn;
+
+	if (get_kernel_nofault(insn, addr) || !is_endbr(insn))
+		return;
+
+	if (get_kernel_nofault(text, addr+4) || text.opcode != SUB_INSN_OPCODE)
+		return;
+
+	if (get_kernel_nofault(text, addr+11) || text.opcode != JE_INSN_OPCODE)
+		return;
+
+	if (get_kernel_nofault(text, addr+13) ||
+			text.opcode != CALL_INSN_OPCODE)
+		return;
+
+	/* validate jmp.d32/call @ loc */
+	if (WARN_ONCE(get_kernel_nofault(text, loc-1) ||
+				(text.opcode != CALL_INSN_OPCODE &&
+				 text.opcode != JMP32_INSN_OPCODE),
+				"Unexpected code at: %pS\n", loc))
+		return;
+
+	DEBUGP("FineIBT fixed direct branch: %pS\n", addr);
+
+	*val += 18;
+#endif
+}
+
 static int __apply_relocate_add(Elf64_Shdr *sechdrs,
 		   const char *strtab,
 		   unsigned int symindex,
@@ -139,6 +174,7 @@ static int __apply_relocate_add(Elf64_Shdr *sechdrs,
 	Elf64_Rela *rel = (void *)sechdrs[relsec].sh_addr;
 	Elf64_Sym *sym;
 	void *loc;
+	int type;
 	u64 val;
 
 	DEBUGP("Applying relocate section %u to %u\n",
@@ -153,13 +189,14 @@ static int __apply_relocate_add(Elf64_Shdr *sechdrs,
 		sym = (Elf64_Sym *)sechdrs[symindex].sh_addr
 			+ ELF64_R_SYM(rel[i].r_info);
 
+		type = ELF64_R_TYPE(rel[i].r_info);
+
 		DEBUGP("type %d st_value %Lx r_addend %Lx loc %Lx\n",
-		       (int)ELF64_R_TYPE(rel[i].r_info),
-		       sym->st_value, rel[i].r_addend, (u64)loc);
+		       type, sym->st_value, rel[i].r_addend, (u64)loc);
 
 		val = sym->st_value + rel[i].r_addend;
 
-		switch (ELF64_R_TYPE(rel[i].r_info)) {
+		switch (type) {
 		case R_X86_64_NONE:
 			break;
 		case R_X86_64_64:
@@ -185,6 +222,8 @@ static int __apply_relocate_add(Elf64_Shdr *sechdrs,
 		case R_X86_64_PLT32:
 			if (*(u32 *)loc != 0)
 				goto invalid_relocation;
+			if (type == R_X86_64_PLT32)
+				fineibt_branch_fix(loc, &val);
 			val -= (u64)loc;
 			write(loc, &val, 4);
 #if 0
