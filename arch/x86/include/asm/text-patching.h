@@ -4,6 +4,7 @@
 
 #include <linux/types.h>
 #include <linux/stddef.h>
+#include <linux/uaccess.h>
 #include <asm/ptrace.h>
 
 struct paravirt_patch_site;
@@ -66,6 +67,12 @@ extern void text_poke_finish(void);
 #define JMP8_INSN_SIZE		2
 #define JMP8_INSN_OPCODE	0xEB
 
+#define SUB_INSN_SIZE     7
+#define SUB_INSN_OPCODE   0x41
+
+#define JE_INSN_SIZE      2
+#define JE_INSN_OPCODE    0x74
+
 #define DISP32_SIZE		4
 
 static __always_inline int text_opcode_size(u8 opcode)
@@ -96,6 +103,83 @@ union text_poke_insn {
 	} __attribute__((packed));
 };
 
+#ifdef CONFIG_X86_KERNEL_FINEIBT
+#define FINEIBT_FIXUP 18
+// AFTER_FINEIBT = FINEIBT_FIXUP - ENDBR_LEN - XOR_LEN - JMP LEN
+#define AFTER_FINEIBT FINEIBT_FIXUP - ENDBR_INSN_SIZE - 3 - 2
+
+/// XXX: THIS IS *NOT* PROPERLY TESTED!
+/// I did stumble on any scenario where this was needed while testing FineIBT,
+/// Yet, I'm keeping this here for concept/future reference. - If we can't fix
+/// the displacement, then the branch will always stumble on the FineIBT hash
+/// check. To prevent that, patch the FineIBT hash check with nops.
+static __always_inline
+void bypass_fineibt_sequence(void *insn) {
+	static const char code[14] = { 0x4d, 0x31, 0xdb, 0xeb, AFTER_FINEIBT,
+		BYTES_NOP8, BYTES_NOP1 };
+	if (unlikely(system_state == SYSTEM_BOOTING)) {
+		text_poke_early(insn + 4, code, 14);
+		text_poke_early(insn + 11, code, 14);
+	}
+
+	text_poke_bp(insn + 4, code, 14, NULL);
+	text_poke_bp(insn + 11, code, 14, NULL);
+}
+
+// Identify if the target address is a FineIBT instruction sequence, which
+// should be:
+// endbr
+// sub $hash, %r11d
+// je 1f
+// call fineibt_handler (this will eventually be replaced with ud2)
+// 1:
+static __always_inline
+bool __is_fineibt_sequence(const void *addr) {
+	union text_poke_insn text;
+	u32 insn;
+
+	// the sequence starts with an endbr
+	if (get_kernel_nofault(insn, addr) || !(is_endbr(insn)))
+		return false;
+
+	// then followed by a sub
+	if (get_kernel_nofault(text, addr+4) || text.opcode != SUB_INSN_OPCODE)
+		return false;
+
+	// followed by a je
+	if (get_kernel_nofault(text, addr+11) || text.opcode != JE_INSN_OPCODE)
+		return false;
+
+	// and finished with a call (which eventually will be an ud2)
+	if (get_kernel_nofault(text, addr+13) ||
+			text.opcode != CALL_INSN_OPCODE)
+		return false;
+
+	return true;
+}
+
+// Verify if the branch target is a FineIBT sequence. If yes, fix the target
+// to point right after the sequence, preventing crashes.
+static __always_inline
+void *__text_fix_fineibt_branch_target(const void *addr, void *dest, int size) {
+	bool fineibt;
+	s32 disp;
+	fineibt = __is_fineibt_sequence(dest);
+	if (!fineibt)
+		return dest;
+
+	disp = (long) dest - (long) (addr + size) + FINEIBT_FIXUP;
+
+	// if fineibt-fixed displacement doesn't fit as an operand,
+	// remove fineibt hash check from target.
+	if (size == 2 && ((disp >> 31) != (disp >> 7))) {
+		bypass_fineibt_sequence(dest);
+		return dest;
+	}
+	return dest + FINEIBT_FIXUP;
+}
+#endif
+
 static __always_inline
 void __text_gen_insn(void *buf, u8 opcode, const void *addr, const void *dest, int size)
 {
@@ -115,7 +199,13 @@ void __text_gen_insn(void *buf, u8 opcode, const void *addr, const void *dest, i
 	insn->opcode = opcode;
 
 	if (size > 1) {
-		insn->disp = (long)dest - (long)(addr + size);
+#ifdef CONFIG_X86_KERNEL_FINEIBT
+		void *fineibt_dest = __text_fix_fineibt_branch_target(addr,
+				(void *) dest, size);
+		insn->disp = (long) fineibt_dest - (long) (addr + size);
+#else
+		insn->disp = (long) dest - (long) (addr + size);
+#endif
 		if (size == 2) {
 			/*
 			 * Ensure that for JMP8 the displacement
