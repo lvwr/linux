@@ -330,13 +330,44 @@ static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
 	return 0;
 }
 
+static inline bool skip_fineibt_sequence(void *func)
+{
+	const void *addr = (void *) func;
+	union text_poke_insn text;
+	u32 insn;
+
+	if ((get_kernel_nofault(insn, addr)) ||
+			(!is_endbr(insn)))
+		return false;
+
+	if ((get_kernel_nofault(text, addr+4)) ||
+			(text.opcode != SUB_INSN_OPCODE))
+		return false;
+
+	if ((get_kernel_nofault(text, addr+11)) ||
+			(text.opcode != JE_INSN_OPCODE))
+		return false;
+
+	if ((get_kernel_nofault(text, addr+13)) ||
+			(text.opcode != CALL_INSN_OPCODE))
+		return false;
+
+	return true;
+}
+
 static int emit_call(u8 **pprog, void *func, void *ip)
 {
+#ifdef CONFIG_X86_KERNEL_FINEIBT
+	if(skip_fineibt_sequence(func)) func = func + FINEIBT_FIXUP;
+#endif
 	return emit_patch(pprog, func, ip, 0xE8);
 }
 
 static int emit_jump(u8 **pprog, void *func, void *ip)
 {
+#ifdef CONFIG_X86_KERNEL_FINEIBT
+	if(skip_fineibt_sequence(func)) func = func + FINEIBT_FIXUP;
+#endif
 	return emit_patch(pprog, func, ip, 0xE9);
 }
 
