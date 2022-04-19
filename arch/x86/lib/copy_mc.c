@@ -22,7 +22,7 @@ void enable_copy_mc_fragile(void)
  * Similar to copy_user_handle_tail, probe for the write fault point, or
  * source exception point.
  */
-__visible notrace unsigned long
+__visible notrace unsigned long __coarseendbr
 copy_mc_fragile_handle_tail(char *to, char *from, unsigned len)
 {
 	for (; len; --len, to++, from++)
