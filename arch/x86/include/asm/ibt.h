@@ -21,6 +21,16 @@
 
 #define HAS_KERNEL_IBT	1
 
+#if defined(CONFIG_X86_KERNEL_FINEIBT) && !defined(BUILD_VDSO) && !defined(BUILD_VDSO32_64)
+#define HAS_KERNEL_FINEIBT  1
+#define FINEIBT_HASH(hash) mov $hash, %r11d
+#define __coarseendbr __attribute__((coarsecf_check))
+#else
+#define HAS_KERNEL_FINEIBT  0
+#define FINEIBT_HASH(hash)
+#define __coarseendbr
+#endif
+
 #ifndef __ASSEMBLY__
 
 #ifdef CONFIG_X86_64
@@ -29,6 +39,7 @@
 #define ASM_ENDBR	"endbr32\n\t"
 #endif
 
+#undef __noendbr
 #define __noendbr	__attribute__((nocf_check))
 
 static inline __attribute_const__ u32 gen_endbr(void)
@@ -80,12 +91,17 @@ extern __noendbr void ibt_restore(u64 save);
 #else /* !IBT */
 
 #define HAS_KERNEL_IBT	0
+#define HAS_KERNEL_FINEIBT 0
+#define FINEIBT_HASH(hash)
 
 #ifndef __ASSEMBLY__
 
 #define ASM_ENDBR
 
+#undef __noendbr
 #define __noendbr
+#undef __coarseendbr
+#define __coarseendbr
 
 static inline bool is_endbr(u32 val) { return false; }
 

@@ -49,7 +49,7 @@ static inline unsigned long __native_read_cr3(void)
 	return val;
 }
 
-static inline void native_write_cr3(unsigned long val)
+static inline void __coarseendbr native_write_cr3(unsigned long val)
 {
 	asm volatile("mov %0,%%cr3": : "r" (val) : "memory");
 }
@@ -74,7 +74,7 @@ static inline unsigned long native_read_cr4(void)
 	return val;
 }
 
-void native_write_cr4(unsigned long val);
+void __coarseendbr native_write_cr4(unsigned long val);
 
 #ifdef CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS
 static inline u32 rdpkru(void)

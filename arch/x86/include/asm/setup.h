@@ -49,10 +49,10 @@ extern unsigned long saved_video_mode;
 
 extern void reserve_standard_io_resources(void);
 extern void i386_reserve_resources(void);
-extern unsigned long __startup_64(unsigned long physaddr, struct boot_params *bp);
-extern unsigned long __startup_secondary_64(void);
-extern void startup_64_setup_env(unsigned long physbase);
-extern void early_setup_idt(void);
+extern unsigned long __coarseendbr __startup_64(unsigned long physaddr, struct boot_params *bp);
+extern unsigned long __coarseendbr __startup_secondary_64(void);
+extern void __coarseendbr startup_64_setup_env(unsigned long physbase);
+extern void __coarseendbr early_setup_idt(void);
 extern void __init do_early_exception(struct pt_regs *regs, int trapnr);
 
 #ifdef CONFIG_X86_INTEL_MID
@@ -137,8 +137,8 @@ extern void probe_roms(void);
 asmlinkage void __init i386_start_kernel(void);
 
 #else
-asmlinkage void __init x86_64_start_kernel(char *real_mode);
-asmlinkage void __init x86_64_start_reservations(char *real_mode_data);
+asmlinkage void __init __coarseendbr x86_64_start_kernel(char *real_mode);
+asmlinkage void __init __coarseendbr x86_64_start_reservations(char *real_mode_data);
 
 #endif /* __i386__ */
 #endif /* _SETUP */

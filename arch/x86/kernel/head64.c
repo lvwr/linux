@@ -162,7 +162,7 @@ static unsigned long __head sme_postprocess_startup(struct boot_params *bp, pmdv
  * boot-time crashes. To work around this problem, every global pointer must
  * be adjusted using fixup_pointer().
  */
-unsigned long __head __startup_64(unsigned long physaddr,
+unsigned long __head __coarseendbr __startup_64(unsigned long physaddr,
 				  struct boot_params *bp)
 {
 	unsigned long load_delta, *p;
@@ -308,7 +308,7 @@ unsigned long __head __startup_64(unsigned long physaddr,
 	return sme_postprocess_startup(bp, pmd);
 }
 
-unsigned long __startup_secondary_64(void)
+unsigned long __coarseendbr __startup_secondary_64(void)
 {
 	/*
 	 * Return the SME encryption mask (if SME is active) to be used as a
@@ -464,8 +464,8 @@ static void __init copy_bootdata(char *real_mode_data)
 	sme_unmap_bootdata(real_mode_data);
 }
 
-asmlinkage __visible void __init x86_64_start_kernel(char * real_mode_data)
-{
+asmlinkage __visible void __init __coarseendbr
+x86_64_start_kernel(char * real_mode_data) {
 	/*
 	 * Build-time sanity checks on the kernel image and module
 	 * area mappings. (these are purely build-time and produce no code)
@@ -597,7 +597,7 @@ static void startup_64_load_idt(unsigned long physbase)
 }
 
 /* This is used when running on kernel addresses */
-void early_setup_idt(void)
+void __coarseendbr early_setup_idt(void)
 {
 	/* VMM Communication Exception */
 	if (IS_ENABLED(CONFIG_AMD_MEM_ENCRYPT))
@@ -610,7 +610,7 @@ void early_setup_idt(void)
 /*
  * Setup boot CPU state needed before kernel switches to virtual addresses.
  */
-void __head startup_64_setup_env(unsigned long physbase)
+void __head __coarseendbr startup_64_setup_env(unsigned long physbase)
 {
 	/* Load GDT */
 	startup_gdt_descr.address = (unsigned long)fixup_pointer(startup_gdt, physbase);

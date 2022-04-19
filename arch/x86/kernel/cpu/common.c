@@ -463,7 +463,7 @@ set_register:
 }
 EXPORT_SYMBOL(native_write_cr0);
 
-void __no_profile native_write_cr4(unsigned long val)
+void __no_profile __coarseendbr native_write_cr4(unsigned long val)
 {
 	unsigned long bits_changed = 0;
 

@@ -295,6 +295,7 @@ SYM_CODE_START(ret_from_fork)
 	/* kernel thread */
 	UNWIND_HINT_EMPTY
 	movq	%r12, %rdi
+	FINEIBT_HASH(0x89f22991)
 	CALL_NOSPEC rbx
 	/*
 	 * A kernel thread is allowed to return here after successfully
