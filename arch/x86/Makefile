@@ -73,6 +73,9 @@ ifeq ($(CONFIG_X86_KERNEL_IBT),y)
 #   https://gcc.gnu.org/bugzilla/show_bug.cgi?id=104816
 #
 KBUILD_CFLAGS += $(call cc-option,-fcf-protection=branch -fno-jump-tables)
+ifeq ($(CONFIG_X86_KERNEL_FINEIBT),y)
+KBUILD_CFLAGS += $(call cc-option, -mfine-ibt)
+endif
 else
 KBUILD_CFLAGS += $(call cc-option,-fcf-protection=none)
 endif
