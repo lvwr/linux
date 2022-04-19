@@ -311,12 +311,13 @@ end:
 	return result;
 }
 
-static ssize_t odvp_show(struct kobject *kobj, struct kobj_attribute *attr,
+static ssize_t odvp_show(struct device *kobj, struct device_attribute *attr,
 			 char *buf)
 {
+	struct kobj_attribute *kattr = (struct kobj_attribute *) attr;
 	struct odvp_attr *odvp_attr;
 
-	odvp_attr = container_of(attr, struct odvp_attr, attr);
+	odvp_attr = container_of(kattr, struct odvp_attr, attr);
 
 	return sprintf(buf, "%d\n", odvp_attr->priv->odvp[odvp_attr->odvp]);
 }
@@ -388,7 +389,10 @@ static int evaluate_odvp(struct int3400_thermal_priv *priv)
 				goto out_err;
 			}
 			odvp->attr.attr.mode = 0444;
-			odvp->attr.show = odvp_show;
+			odvp->attr.show = (ssize_t (*)
+					(struct kobject *,
+					 struct kobj_attribute *,
+					 char *)) odvp_show;
 			odvp->attr.store = NULL;
 			ret = sysfs_create_file(&priv->pdev->dev.kobj,
 						&odvp->attr.attr);
