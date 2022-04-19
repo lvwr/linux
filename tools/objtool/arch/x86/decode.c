@@ -22,6 +22,7 @@
 #include <objtool/endianness.h>
 #include <objtool/builtin.h>
 #include <arch/elf.h>
+#include <arch/special.h>
 
 static int is_x86_64(const struct elf *elf)
 {
@@ -241,54 +242,61 @@ int arch_decode_instruction(struct objtool_file *file, const struct section *sec
 		 *     011 SBB    111 CMP
 		 */
 
-		/* 64bit only */
-		if (!rex_w)
-			break;
+		/* %rsp target */
+		if (rm_is_reg(CFI_SP)) {
 
-		/* %rsp target only */
-		if (!rm_is_reg(CFI_SP))
-			break;
+			/* 64 bit only */
+			if (!rex_w)
+				break;
 
-		imm = insn.immediate.value;
-		if (op1 & 2) { /* sign extend */
-			if (op1 & 1) { /* imm32 */
-				imm <<= 32;
-				imm = (s64)imm >> 32;
-			} else { /* imm8 */
-				imm <<= 56;
-				imm = (s64)imm >> 56;
+			imm = insn.immediate.value;
+			if (op1 & 2) { /* sign extend */
+				if (op1 & 1) { /* imm32 */
+					imm <<= 32;
+					imm = (s64)imm >> 32;
+				} else { /* imm8 */
+					imm <<= 56;
+					imm = (s64)imm >> 56;
+				}
+			}
+
+			switch (modrm_reg & 7) {
+			case 5:
+				imm = -imm;
+				/* fallthrough */
+			case 0:
+				/* add/sub imm, %rsp */
+				ADD_OP(op) {
+					op->src.type = OP_SRC_ADD;
+					op->src.reg = CFI_SP;
+					op->src.offset = imm;
+					op->dest.type = OP_DEST_REG;
+					op->dest.reg = CFI_SP;
+				}
+				break;
+
+			case 4:
+				/* and imm, %rsp */
+				ADD_OP(op) {
+					op->src.type = OP_SRC_AND;
+					op->src.reg = CFI_SP;
+					op->src.offset = insn.immediate.value;
+					op->dest.type = OP_DEST_REG;
+					op->dest.reg = CFI_SP;
+				}
+				break;
+
+			default:
+				/* WARN ? */
+				break;
 			}
 		}
 
-		switch (modrm_reg & 7) {
-		case 5:
-			imm = -imm;
-			/* fallthrough */
-		case 0:
-			/* add/sub imm, %rsp */
-			ADD_OP(op) {
-				op->src.type = OP_SRC_ADD;
-				op->src.reg = CFI_SP;
-				op->src.offset = imm;
-				op->dest.type = OP_DEST_REG;
-				op->dest.reg = CFI_SP;
+		if (rm_is_reg(CFI_R11)) {
+			if (op1 == 0x81) {
+				*type = INSN_SUB_R11;
+				break;
 			}
-			break;
-
-		case 4:
-			/* and imm, %rsp */
-			ADD_OP(op) {
-				op->src.type = OP_SRC_AND;
-				op->src.reg = CFI_SP;
-				op->src.offset = insn.immediate.value;
-				op->dest.type = OP_DEST_REG;
-				op->dest.reg = CFI_SP;
-			}
-			break;
-
-		default:
-			/* WARN ? */
-			break;
 		}
 
 		break;
@@ -727,6 +735,91 @@ const char *arch_nop_insn(int len)
 	}
 
 	return nops[len-1];
+}
+
+const char *arch_bypass_fineibt()
+{
+	// FineIBT skip is:
+	// xor r11, r11 (to destroy any hash contents in r11 and prevent reuse)
+	// jmp (jump to the beginning of function and skip whatever)
+
+	// AFTER_FINEIBT = FineIBT len - endbr len - xor len - jmp len
+#define AFTER_FINEIBT FINEIBT_FIXUP - 4 - 3 - 2
+	static const char bytes[7] = { 0x4d, 0x31, 0xdb, 0xeb,
+		AFTER_FINEIBT , BYTES_NOP2};
+	return bytes;
+}
+
+const char *arch_mod_immediate(struct instruction *insn, unsigned long target)
+{
+	struct section *sec = insn->sec;
+	Elf_Data *data = sec->data;
+	unsigned char op1, op2;
+	static char bytes[16];
+	struct insn x86_insn;
+	int ret, disp;
+
+	disp = (long)(target - (insn->offset + insn->len));
+
+	if (data->d_type != ELF_T_BYTE || data->d_off) {
+		WARN("unexpected data for section: %s", sec->name);
+		return NULL;
+	}
+
+	ret = insn_decode(&x86_insn, data->d_buf + insn->offset, insn->len,
+			INSN_MODE_64);
+	if (ret < 0) {
+		WARN("can't decode instruction at %s:0x%lx", sec->name,
+				insn->offset);
+		return NULL;
+	}
+
+	op1 = x86_insn.opcode.bytes[0];
+	op2 = x86_insn.opcode.bytes[1];
+
+	switch (op1) {
+		case 0x0f: /* escape */
+			switch (op2) {
+				case 0x80 ... 0x8f: /* jcc.d32 */
+					if (insn->len != 6)
+						return NULL;
+					bytes[0] = op1;
+					bytes[1] = op2;
+					*(int *)&bytes[2] = disp;
+					break;
+
+				default:
+					return NULL;
+			}
+			break;
+
+		case 0x70 ... 0x7f: /* jcc.d8 */
+		case 0xeb: /* jmp.d8 */
+			if (insn->len != 2)
+				return NULL;
+
+			if (disp >> 7 != disp >> 31) {
+				WARN("Jump displacement doesn't fit");
+				return NULL;
+			}
+
+			bytes[0] = op1;
+			bytes[1] = disp & 0xff;
+			break;
+
+		case 0xe8: /* call */
+		case 0xe9: /* jmp.d32 */
+			if (insn->len != 5)
+				return NULL;
+			bytes[0] = op1;
+			*(int *)&bytes[1] = disp;
+			break;
+
+		default:
+			return NULL;
+	}
+
+	return bytes;
 }
 
 #define BYTE_RET	0xC3

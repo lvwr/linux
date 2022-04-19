@@ -18,4 +18,6 @@
 #define ALT_ORIG_LEN_OFFSET	10
 #define ALT_NEW_LEN_OFFSET	11
 
+#define FINEIBT_FIXUP 18
+
 #endif /* _X86_ARCH_SPECIAL_H */

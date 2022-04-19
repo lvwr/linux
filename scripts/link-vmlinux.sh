@@ -126,6 +126,10 @@ objtool_link()
 		if is_enabled CONFIG_FTRACE_MCOUNT_USE_OBJTOOL; then
 			objtoolopt="${objtoolopt} --mcount"
 		fi
+
+		if is_enabled CONFIG_X86_KERNEL_FINEIBT; then
+			objtoolopt="${objtoolopt} --fineibt"
+		fi
 	fi
 
 	if is_enabled CONFIG_VMLINUX_VALIDATION; then
@@ -152,6 +156,9 @@ objtool_link()
 		if is_enabled CONFIG_SLS; then
 			objtoolopt="${objtoolopt} --sls"
 		fi
+		if is_enabled CONFIG_X86_KERNEL_FINEIBT; then
+			objtoolopt="${objtoolopt} --fineibt"
+		fi
 		info OBJTOOL ${1}
 		tools/objtool/objtool ${objtoolcmd} ${objtoolopt} ${1}
 	fi
@@ -175,6 +182,7 @@ vmlinux_link()
 	shift
 
 	if is_enabled CONFIG_LTO_CLANG || is_enabled CONFIG_X86_KERNEL_IBT; then
+  #if is_enabled CONFIG_LTO_CLANG; then
 		# Use vmlinux.o instead of performing the slow LTO link again.
 		objs=vmlinux.o
 		libs=

@@ -21,7 +21,7 @@
 
 bool no_fp, no_unreachable, retpoline, module, backtrace, uaccess, stats,
      lto, vmlinux, mcount, noinstr, backup, sls, dryrun,
-     ibt;
+     ibt, fineibt;
 
 static const char * const check_usage[] = {
 	"objtool check [<options>] file.o",
@@ -49,6 +49,7 @@ const struct option check_options[] = {
 	OPT_BOOLEAN('S', "sls", &sls, "validate straight-line-speculation"),
 	OPT_BOOLEAN(0, "dry-run", &dryrun, "don't write the modifications"),
 	OPT_BOOLEAN(0, "ibt", &ibt, "validate ENDBR placement"),
+	OPT_BOOLEAN(0, "fineibt", &fineibt, "fix FineIBT direct calls"),
 	OPT_END(),
 };
 

@@ -28,6 +28,7 @@ enum insn_type {
 	INSN_CLD,
 	INSN_TRAP,
 	INSN_ENDBR,
+	INSN_SUB_R11,
 	INSN_OTHER,
 };
 
@@ -85,6 +86,8 @@ unsigned long arch_dest_reloc_offset(int addend);
 
 const char *arch_nop_insn(int len);
 const char *arch_ret_insn(int len);
+const char *arch_mod_immediate(struct instruction *insn, unsigned long target);
+const char *arch_bypass_fineibt(void);
 
 int arch_decode_hint_reg(u8 sp_reg, int *base);
 

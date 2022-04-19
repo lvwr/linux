@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 
 #include <arch/elf.h>
+#include <arch/special.h>
 #include <objtool/builtin.h>
 #include <objtool/cfi.h>
 #include <objtool/arch.h>
@@ -27,7 +28,7 @@ struct alternative {
 	bool skip_orig;
 };
 
-static unsigned long nr_cfi, nr_cfi_reused, nr_cfi_cache;
+static unsigned long nr_cfi, nr_cfi_reused, nr_cfi_cache, nr_fineibt;
 
 static struct cfi_init_state initial_func_cfi;
 static struct cfi_state init_cfi;
@@ -1209,6 +1210,173 @@ static void add_call_dest(struct objtool_file *file, struct instruction *insn,
 	remove_insn_ops(insn);
 
 	annotate_call_site(file, insn, sibling);
+}
+
+static bool is_fineibt_sequence(struct objtool_file *file,
+		struct section *dest_sec, unsigned long dest_off) {
+
+	struct instruction *insn;
+
+	insn = find_insn(file, dest_sec, dest_off);
+	if (insn->type != INSN_ENDBR)
+		return false;
+
+	insn = find_insn(file, dest_sec, dest_off+4);
+	arch_decode_instruction(file, dest_sec, dest_off+4,
+			dest_sec->sh.sh_size - (dest_off+4),
+			&insn->len, &insn->type, &insn->immediate,
+			&insn->stack_ops);
+	if (insn->type != INSN_SUB_R11)
+		return false;
+
+	insn = find_insn(file, dest_sec, dest_off+11);
+	arch_decode_instruction(file, dest_sec, dest_off+11,
+			dest_sec->sh.sh_size - (dest_off+11),
+			&insn->len, &insn->type, &insn->immediate,
+			&insn->stack_ops);
+	if (insn->type != INSN_JUMP_CONDITIONAL)
+		return false;
+
+	// XXX: when call __fineibt_handler is replaced by ud2, check it here.
+	return true;
+}
+
+static bool nopout_jmp_target(struct objtool_file *file,
+		struct instruction *jmp) {
+	struct instruction *tgt = jmp->jump_dest;
+	const char *op = arch_bypass_fineibt();
+
+	if (is_fineibt_sequence(file, tgt->sec, tgt->offset)) {
+		tgt = next_insn_same_func(file, tgt);
+		elf_write_insn(file->elf, tgt->sec, tgt->offset, 7, op);
+		return true;
+	}
+	return false;
+}
+
+static void fix_fineibt_call(struct objtool_file *file,
+		struct instruction *insn) {
+
+	unsigned long dest_off;
+	struct instruction *target = NULL;
+	struct reloc *reloc = insn_reloc(file, insn);
+	const char *op = NULL;
+
+	if (!reloc) {
+		dest_off = arch_jump_destination(insn);
+		target = find_insn(file, insn->sec,
+				dest_off);
+
+	} else if (reloc->sym->retpoline_thunk) {
+		return;
+
+	} else {
+		dest_off = reloc->sym->offset +
+			arch_dest_reloc_offset(reloc->addend);
+		target = find_insn(file, reloc->sym->sec, dest_off);
+	}
+
+	if (target && target->type == INSN_ENDBR
+			&& is_fineibt_sequence(file, target->sec, dest_off)) {
+		if (reloc) {
+			reloc->addend += FINEIBT_FIXUP;
+			elf_write_reloc(file->elf, reloc);
+		} else {
+			op = arch_mod_immediate(insn, dest_off + FINEIBT_FIXUP);
+			if (op) {
+				elf_write_insn(file->elf, insn->sec,
+						insn->offset, insn->len, op);
+			} else {
+				WARN_FUNC("Can't fix direct call to FineIBT",
+						insn->sec, insn->offset);
+				return;
+			}
+		}
+	}
+}
+
+static void fix_fineibt_jump(struct objtool_file *file,
+		struct instruction *insn) {
+
+	unsigned long dest_off;
+	struct section *dest_sec;
+	struct reloc *reloc = insn_reloc(file, insn);
+	const char *op = NULL;
+
+	if (!reloc) {
+		dest_sec = insn->sec;
+		dest_off = arch_jump_destination(insn);
+
+	} else if (reloc->sym->type == STT_SECTION) {
+		dest_sec = reloc->sym->sec;
+		dest_off = arch_dest_reloc_offset(reloc->addend);
+
+	} else if (reloc->sym->retpoline_thunk) {
+		return;
+
+	} else if (insn->func || reloc->sym->sec->idx) {
+		dest_sec = reloc->sym->sec;
+		dest_off = reloc->sym->offset +
+			arch_dest_reloc_offset(reloc->addend);
+	} else {
+		return;
+	}
+
+	insn->jump_dest = find_insn(file, dest_sec, dest_off);
+	if (!insn->jump_dest) {
+		if (!vmlinux && insn->func) {
+			dest_sec = insn->func->sec;
+			dest_off = insn->func->offset;
+		} else if (!strcmp(insn->sec->name, ".altinstr_replacement")) {
+			/* XXX: corner case unclear if fineibt-relevant */
+			return;
+		}
+	}
+
+	if  (insn->jump_dest->type == INSN_ENDBR &&
+			is_fineibt_sequence(file, insn->jump_dest->sec,
+				dest_off)) {
+		if (reloc) {
+			reloc->addend += FINEIBT_FIXUP;
+			elf_write_reloc(file->elf, reloc);
+			return;
+		}
+		op = arch_mod_immediate(insn, dest_off + FINEIBT_FIXUP);
+		if (op) {
+			elf_write_insn(file->elf, insn->sec, insn->offset,
+					insn->len, op);
+			return;
+		}
+		if (nopout_jmp_target(file, insn)) {
+			WARN_FUNC("Can't fix direct jump to FineIBT",
+					insn->sec, insn->offset);
+			return;
+		} else {
+			WARN_FUNC("Can't fix direct jump to FineIBT",
+					insn->sec, insn->offset);
+			return;
+		}
+	}
+}
+
+static bool fix_fineibt_branches(struct objtool_file *file) {
+	struct instruction *insn;
+	struct section *sec;
+
+	for_each_sec(file, sec) {
+		if (!sec->text) {
+			continue;
+		}
+
+		sec_for_each_insn(file, sec, insn) {
+			if (insn->type == INSN_CALL) {
+				fix_fineibt_call(file, insn);
+			} else if (is_static_jump(insn)) {
+				fix_fineibt_jump(file, insn);
+			}
+		}
+	}
+	return 0;
 }
 
 static void add_retpoline_call(struct objtool_file *file, struct instruction *insn)
@@ -3859,6 +4027,11 @@ int check(struct objtool_file *file)
 		return 1;
 	}
 
+	if (fineibt && !ibt) {
+		fprintf(stderr, "--fineibt requires: --ibt\n");
+		return 1;
+	}
+
 	arch_initial_func_cfi_state(&initial_func_cfi);
 	init_cfi_state(&init_cfi);
 	init_cfi_state(&func_cfi);
@@ -3945,11 +4118,19 @@ int check(struct objtool_file *file)
 		warnings += ret;
 	}
 
+	if (fineibt) {
+		ret = fix_fineibt_branches(file);
+		if (ret < 0)
+			goto out;
+		warnings += ret;
+	}
+
 	if (stats) {
 		printf("nr_insns_visited: %ld\n", nr_insns_visited);
 		printf("nr_cfi: %ld\n", nr_cfi);
 		printf("nr_cfi_reused: %ld\n", nr_cfi_reused);
 		printf("nr_cfi_cache: %ld\n", nr_cfi_cache);
+		if (fineibt) printf("nr_fineibt_entries: %ld\n", nr_fineibt);
 	}
 
 out:
